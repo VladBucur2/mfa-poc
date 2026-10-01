@@ -1,17 +1,136 @@
+# Local laboratory for the mfa-poc proof of concept. Follow LOCAL-RUNBOOK.md.
+#
+#   docker compose run --rm setup                once: .env, certificate, client.env
+#   docker compose run --rm test                 unit tests, including the RFC test vectors
+#   docker compose up -d                         mysql + app + nginx
+#   docker compose run --rm client case3         scripted test cases
+#   docker compose run --rm capture-tls case10   capture behind nginx, Ctrl-c to stop
+
+name: mfa-poc
+
 services:
   mysql:
     image: mysql:8.4
-    container_name: mfapoc-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpw}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
       MYSQL_DATABASE: mfapoc
       MYSQL_USER: mfapoc
-      MYSQL_PASSWORD: ${DB_PASSWORD:-mfapoc}
-    ports:
-      - "127.0.0.1:3306:3306"
+      MYSQL_PASSWORD: ${DB_PASSWORD:-}
     volumes:
-      - mfapoc-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    # no ports: only the application can reach the database
+
+  app:
+    build: .
+    image: mfa-poc-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/mfapoc?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_PASSWORD: ${DB_PASSWORD:-}
+      POC_SECRET_KEY: ${POC_SECRET_KEY:-}
+      POC_REQUESTER_PASSWORD: ${POC_REQUESTER_PASSWORD:-}
+      POC_ADMIN_PASSWORD: ${POC_ADMIN_PASSWORD:-}
+    volumes:
+      - app-logs:/app/logs
+    # no ports: the only way in is through nginx and TLS
+
+  nginx:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "127.0.0.1:8443:443"     # loopback only: not reachable from the network you are on
+    volumes:
+      - ./deploy/local/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/ssl/mfapoc:ro
+
+  # ---- test case 11 only: a plaintext listener, started on demand -------------------------
+  nginx-plain:
+    image: nginx:stable-alpine
+    profiles: ["plaintext"]
+    depends_on:
+      - app
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./deploy/local/nginx-plain.conf:/etc/nginx/conf.d/default.conf:ro
+
+  # ---- tools ---------------------------------------------------------------------------------
+  setup:
+    build: ./tools
+    image: mfa-poc-tools
+    profiles: ["tools"]
+    volumes:
+      - ./:/work
+    entrypoint: ["bash", "/work/deploy/local/setup.sh"]
+
+  test:
+    image: maven:3.9-eclipse-temurin-21
+    profiles: ["tools"]
+    working_dir: /src
+    volumes:
+      - ./:/src
+      - maven-cache:/root/.m2
+    command: ["mvn", "-B", "test"]
+
+  client:
+    build: ./tools
+    image: mfa-poc-tools
+    profiles: ["tools"]
+    env_file:
+      - path: client.env
+        required: false
+    environment:
+      BASE: https://mfa-poc.localhost
+      # Connect to the nginx container while still asking for mfa-poc.localhost, so the
+      # certificate check and Host header match what the browser sees.
+      CONNECT_TO: mfa-poc.localhost:443:nginx:443
+      CACERT: /work/certs/mfapoc.crt
+    volumes:
+      - ./deploy:/work/deploy:ro
+      - ./certs:/work/certs:ro
+    entrypoint: ["bash", "/work/deploy/client-tests.sh"]
+
+  # Captures run inside the network namespace of an nginx container, so they see exactly
+  # the traffic that reaches it: no spoofing, no port mirroring.
+  capture-tls:
+    build: ./tools
+    image: mfa-poc-tools
+    profiles: ["tools"]
+    network_mode: "service:nginx"
+    cap_add: ["NET_ADMIN", "NET_RAW"]
+    environment:
+      PORT: "443"
+    volumes:
+      - ./captures:/captures
+      - ./deploy:/work/deploy:ro
+    entrypoint: ["bash", "/work/deploy/local/capture.sh"]
+
+  capture-plain:
+    build: ./tools
+    image: mfa-poc-tools
+    profiles: ["plaintext"]
+    network_mode: "service:nginx-plain"
+    cap_add: ["NET_ADMIN", "NET_RAW"]
+    environment:
+      PORT: "8081"
+    volumes:
+      - ./captures:/captures
+      - ./deploy:/work/deploy:ro
+    entrypoint: ["bash", "/work/deploy/local/capture.sh"]
 
 volumes:
-  mfapoc-data:
+  mysql-data:
+  app-logs:
+  maven-cache:

@@ -1,184 +1,121 @@
-# mfa-poc — BoK proof of concept: two-factor authentication
+# mfa-poc: BoK proof of concept for two-factor authentication
 
 A small Spring Boot application that demonstrates TOTP two-factor authentication the way
-SecureDesk will implement it: a two-step login where a correct password alone produces a
+SecureDesk will implement it: a two-step login in which a correct password alone produces a
 session with no authorities, Argon2id password storage, an encrypted TOTP secret, replay
-prevention, lockout, single-use recovery codes and a JSON audit trail.
+prevention, lockout, single-use recovery codes, an administrator reset, and a JSON audit trail.
 
 It is deliberately **not** part of SecureDesk. It is the prototype of control SC-01, built so
-the TOTP service, the security configuration and the test cases can be lifted into the
+the TOTP service, the security configuration and the test cases can be moved into the
 application once that exists.
+
+**To run the laboratory, follow [LOCAL-RUNBOOK.md](LOCAL-RUNBOOK.md) from start to finish.**
+Everything runs in Docker on one laptop; this README describes the project itself.
 
 ---
 
-## 1. What is in here
+## What is in here
 
 | Path | What it is |
 |---|---|
-| `service/TotpService.java` | RFC 6238 verification: HMAC-SHA1 from the JDK, RFC 4226 truncation, ±1 step window, replay check |
-| `service/Base32.java` | RFC 4648 Base32, so the secret can go into an `otpauth://` URI |
+| `service/TotpService.java` | RFC 6238 verification: HMAC-SHA1 from the JDK, RFC 4226 truncation, one-step window, replay check |
+| `service/Base32.java` | RFC 4648 Base32, so the secret fits an `otpauth://` URI |
 | `service/SecretCipher.java` | AES-256-GCM for the secret at rest |
-| `service/AuthService.java` | Password verification, enrolment, code verification, lockout, recovery codes |
+| `service/AuthService.java` | Password check, enrolment, code check, lockout window, recovery codes, reset |
 | `service/AuditLog.java` | One JSON line per security event, with a fixed field set |
 | `config/SecurityConfig.java` | Argon2id encoder (19 MiB, t=2, p=1), deny-by-default rules, CSP |
-| `web/AuthController.java` | The two-step flow: `/login` → `/mfa` (or `/enrol`) → authenticated |
+| `web/AuthController.java` | The two-step flow: `/login`, then `/mfa` or `/enrol`, then authenticated |
+| `web/HomeController.java` | Home page, admin page, administrator MFA reset |
 | `src/test/...` | RFC 4226 and RFC 4648 test vectors, replay and window tests |
-| `deploy/` | Nginx config with TLS and per-IP rate limiting, certificate script |
+| `Dockerfile` | Two stages: build with tests, then a JRE-only image running as an unprivileged user |
+| `docker-compose.yml` | The laboratory: `mysql`, `app`, `nginx`, plus tools, captures and a plaintext listener on demand |
+| `compose.insecure-cookie.yml` | Override for one capture in test case 11 only |
+| `deploy/local/nginx.conf` | TLS, security headers, per-IP rate limit (20/min, burst 10, answers 429), external port forwarding |
+| `deploy/local/nginx-plain.conf` | The plaintext listener for test case 11 |
+| `deploy/local/setup.sh`, `deploy/make-env.sh` | One-time setup: secrets, certificate, `client.env` |
+| `deploy/local/capture.sh` | `tcpdump` inside an Nginx container's network namespace |
+| `deploy/client-tests.sh` | Scripted test cases, CSRF-aware, plus code helpers |
+| `tools/Dockerfile` | Small image with bash, curl, oathtool, openssl and tcpdump |
+| `LOCAL-RUNBOOK.md` | Every step, from installing Docker to the evidence |
 
-## 2. Prerequisites
+## Quick start without Docker
 
-- JDK 21 (`sudo apt install openjdk-21-jdk`)
-- Maven 3.9+ (`sudo apt install maven`)
-- Docker with the compose plugin, for MySQL (not needed for the `dev` profile)
-- `oath-toolkit` on the client machine (`sudo apt install oathtool`), and optionally KeePassXC
-
-**Netlab note.** The build downloads dependencies from Maven Central. If the lab VMs have no
-route out, build on a machine that does (`mvn -B package`) and copy `target/mfa-poc-0.1.0.jar`
-to `vm-app` with `scp`. The same applies to the MySQL image: either `docker compose pull` where
-there is internet and move the image with `docker save` / `docker load`, or run with the `dev`
-profile, which uses an in-memory database and needs nothing.
-
-## 3. Run it in two minutes (no infrastructure)
+If you have JDK 21 and Maven, the `dev` profile runs the application on its own, with an
+in-memory database and a built-in development key:
 
 ```bash
-export POC_SECRET_KEY="$(openssl rand -base64 32)"
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
-Open `http://localhost:8080/login`. Sign in as `admin` / `Admin-PoC-2026!` — that account has
-`mfaRequired`, so it goes straight to enrolment. Add the secret to your generator:
+In PowerShell, quote the argument: `"-Dspring-boot.run.profiles=dev"`.
 
-```bash
-oathtool --totp -b "THE-SECRET-FROM-THE-PAGE"
-```
+Open `http://localhost:8080/login` and sign in as `admin` with the default password from
+`application.properties`. That account has `mfaRequired`, so it goes straight to enrolment.
+Add the secret to a generator, for example `oathtool --totp -b "<secret>"`, confirm the code,
+note the recovery codes, and you are in. The `requester` account has no second factor, so the
+one-factor and two-factor flows can be shown side by side.
 
-Type the code, enable the factor, write down the recovery codes, and you are in. The
-`requester` account (`Requester-PoC-2026!`) starts without a second factor, so you can show
-the one-factor and two-factor flows side by side.
+The `dev` profile uses an in-memory database and a non-`Secure` cookie so it works over plain
+HTTP on your own machine. Never use it for the lab or the assessment.
 
-## 4. Run it in the lab
+## How the two-step flow is built
 
-On `vm-app`:
+There is no `formLogin()`. `POST /login` checks the password and puts the user's **id** in the
+session, not an `Authentication`. The `SecurityContext` stays empty, so every protected URL
+still rejects the session. Only a correct code at `POST /mfa` (or confirmed enrolment at
+`POST /enrol`) creates the `Authentication`, and the session id is rotated with
+`request.changeSessionId()` before it is saved. Test case 3 fails if this is ever simplified.
 
-```bash
-# 1. database
-docker compose up -d
+`TotpService.verify()` skips every time step at or below the last accepted one, which makes a
+code single use instead of valid for its whole window. Unknown usernames are checked against a
+dummy Argon2 hash made at startup, so timing does not reveal which accounts exist. Codes are
+compared with `MessageDigest.isEqual`.
 
-# 2. secrets and seed passwords — never commit these
-export POC_SECRET_KEY="$(openssl rand -base64 32)"
-export DB_PASSWORD="<the password from docker-compose>"
-export POC_REQUESTER_PASSWORD="<choose>"
-export POC_ADMIN_PASSWORD="<choose>"
+## The audit trail
 
-# 3. application
-mvn -B package
-java -jar target/mfa-poc-0.1.0.jar
-
-# 4. TLS front end
-./deploy/make-cert.sh mfa-poc.lab 10.0.0.10
-sudo cp deploy/nginx-mfa-poc.conf /etc/nginx/sites-available/mfa-poc
-sudo ln -s /etc/nginx/sites-available/mfa-poc /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-On `vm-client`, add `10.0.0.10 mfa-poc.lab` to `/etc/hosts` and browse to
-`https://mfa-poc.lab/login`. Keep the clocks in step on every VM:
-
-```bash
-sudo apt install chrony
-sudo timedatectl set-ntp true
-timedatectl   # check "System clock synchronized: yes" before each run
-```
-
-## 5. The eleven test cases
-
-These are the cases listed in BoK section 6.1.5. Run them in order and capture the screen or
-the terminal for each. `$SECRET` is the Base32 secret shown during enrolment.
-
-| # | How to run it | What should happen |
-|---|---|---|
-| 1 | Sign in, then `oathtool --totp -b "$SECRET"` and enter the code | Home page shows the username and `[ROLE_ADMIN]` |
-| 2 | Same, but type `000000` | "That code is not valid", still on the code page |
-| 3 | After step 1 of the login, browse directly to `https://mfa-poc.lab/` | Redirected to `/login`: the pending session has no authorities |
-| 4 | Use one code twice, inside the same 30 seconds | First accepted, second rejected |
-| 5 | `oathtool --totp -b "$SECRET" --now "$(date -u -d '-30 seconds' '+%Y-%m-%d %H:%M:%S UTC')"` | Accepted: the window tolerates one step |
-| 6 | Same with `-90 seconds` | Rejected: three steps old |
-| 7 | On `vm-client`: `sudo timedatectl set-ntp false && sudo date -s '+2 minutes'`, generate a code | Rejected; restore with `sudo timedatectl set-ntp true` |
-| 8 | Eleven wrong codes in a row (see the loop below) | Lockout, `MFA_LOCKOUT` in the audit log, further attempts rejected for 15 minutes |
-| 9 | Sign in with a recovery code, then try the same one again | First accepted, second rejected |
-| 10 | Capture the TLS login and open it in Arkime | Only handshake and encrypted records; no password, code or cookie |
-| 11 | Repeat against `http://mfa-poc.lab:8081` and open that in Arkime | `username=…&password=…` and the code readable in the request body |
-
-Lockout loop for case 8:
-
-```bash
-for i in $(seq 1 11); do
-  echo -n "attempt $i: "
-  curl -sk -o /dev/null -w "%{http_code}\n" https://mfa-poc.lab/mfa \
-       -b cookies.txt -c cookies.txt -d "code=000000"
-done
-tail -f logs/audit.log
-```
-
-Capture and import for cases 10 and 11, on `vm-app` then `vm-arkime`:
-
-```bash
-# vm-app
-sudo tcpdump -i any -w ~/login-tls.pcap 'port 443 or port 8081'
-#   ... perform the login on vm-client, then Ctrl-C
-scp ~/login-tls.pcap arkime@vm-arkime:~/
-
-# vm-arkime
-/opt/arkime/bin/capture -r ~/login-tls.pcap
-```
-
-For case 11 the session cookie will not be set over plaintext, because the cookie is marked
-`Secure`. That refusal is itself evidence worth a screenshot. To complete the flow over HTTP,
-start the app with `--server.servlet.session.cookie.secure=false` for that one run only, and
-say so in the report.
-
-## 6. The audit trail
-
-Every run writes `logs/audit.log`, one JSON object per line:
+`logs/audit.log`, one JSON object per line:
 
 ```json
 {"ts":"2026-10-01T09:14:22.118Z","event":"LOGIN_PASSWORD","actor":"admin","outcome":"SUCCESS","src_ip":"10.0.0.20","session":"3f9a1c77b2d4"}
 {"ts":"2026-10-01T09:14:31.902Z","event":"MFA_VERIFY","actor":"admin","outcome":"FAILURE","src_ip":"10.0.0.20","session":"3f9a1c77b2d4","failed_count":"1"}
 ```
 
-Events: `LOGIN_PASSWORD`, `LOGIN_BLOCKED`, `LOGIN_COMPLETE`, `MFA_VERIFY`, `MFA_LOCKOUT`,
-`MFA_ENROL_START`, `MFA_ENROL_CONFIRM`. No secret, code, password or raw session id is ever
-written: the session field is the first six bytes of a SHA-256 of the id.
+| Event | When |
+|---|---|
+| `LOGIN_PASSWORD` | Password step, success or failure |
+| `LOGIN_BLOCKED` | Correct password on a locked account |
+| `LOGIN_COMPLETE` | Fully signed in, with `factors` 1 or 2 |
+| `MFA_VERIFY` | Code step, with `method` totp or recovery_code, or `failed_count` |
+| `MFA_RECOVERY_USED` | A recovery code was spent (`alert`) |
+| `MFA_LOCKOUT` | Ten failures inside fifteen minutes |
+| `MFA_ENROL_START`, `MFA_ENROL_CONFIRM` | Enrolment begun and confirmed |
+| `MFA_RESET` | An administrator removed someone's factor (`alert`, with `target`) |
 
-## 7. Tests
+No secret, code, password or raw session id is ever written: the session field is the first
+six bytes of a SHA-256 of the id. Behind Nginx, `src_ip` is taken from `X-Forwarded-For`, which the
+application trusts only from proxies on private addresses such as the Nginx container. With
+Docker Desktop, browser traffic arrives through its port forwarder, so for the browser that
+address is the Docker gateway; for the `client` container it is the container's own address.
+
+## Tests
 
 ```bash
-mvn test
+docker compose run --rm test        # or, with a local JDK and Maven: mvn test
 ```
 
 `TotpServiceTest` checks the implementation against the ten official test vectors of
 RFC 4226 Appendix D, then covers replay, the window boundary and malformed input.
-`Base32Test` checks the RFC 4648 vectors and round-trips random secrets. Run this before the
-assessment: "it matches the RFC's own vectors" is a stronger claim than "it worked when I
-tried it".
+`Base32Test` checks the RFC 4648 vectors and round-trips random secrets.
 
-## 8. Troubleshooting
+## Known limits
 
-| Symptom | Cause |
-|---|---|
-| Every code is rejected | Clock drift. Check `timedatectl` on both VMs; a snapshot restore is the usual culprit |
-| `poc.secret-key must decode to 32 bytes` | `POC_SECRET_KEY` is unset or not 32 random bytes in base64 |
-| `NoClassDefFoundError: org/bouncycastle/...` | The BouncyCastle dependency did not resolve; Argon2PasswordEncoder needs it |
-| Login succeeds but you bounce back to `/login` | The session cookie is `Secure` and you are on plaintext HTTP; use HTTPS or the `dev` profile |
-| Nginx returns 502 | The app binds to `127.0.0.1:8080` by default; check it is running on the same host as Nginx |
-| MySQL connection refused | `docker compose up -d` and wait for the container to become healthy |
-
-## 9. Known limits
-
-Written down because they belong in the report rather than in a demo that claims more than it shows:
+Written down because they belong in the report, not hidden behind a demo:
 
 - TOTP is phishable through a real-time relay; WebAuthn is the phishing-resistant answer.
 - The encryption key comes from an environment variable, not a vault (that is PoC 6.4).
+- Behind Nginx, the hop to the application is plain HTTP inside the private container
+  network; SecureDesk's SR-04 asks for TLS there too.
 - The progressive delay blocks a request thread; acceptable here, not in production.
 - `ddl-auto=update` creates the schema; a real deployment uses versioned migrations.
-- There is no password pepper yet: SecureDesk adds it as part of SC-02.
+- There is no password pepper yet; SecureDesk adds it as part of SC-02.
+- Pin the Spring Boot version you actually build with, and record it in the SBoM.

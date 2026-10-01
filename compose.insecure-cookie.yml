@@ -1,0 +1,10 @@
+# Test case 11, full variant ONLY: turns off the Secure flag on the session cookie, so the
+# complete login can be captured over plain HTTP. Use it for one capture, then restart
+# without it:
+#   docker compose -f docker-compose.yml -f compose.insecure-cookie.yml up -d app
+#   ... capture ...
+#   docker compose up -d app
+services:
+  app:
+    environment:
+      SERVER_SERVLET_SESSION_COOKIE_SECURE: "false"
