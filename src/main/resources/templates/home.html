@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Signed in</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main>
+    <h1>Signed in</h1>
+    <p>User: <strong th:text="${username}"></strong></p>
+    <p>Authorities: <code th:text="${authorities}"></code></p>
+    <p><a href="/admin">Administrator page</a> (403 unless the role is ROLE_ADMIN)</p>
+    <form method="post" th:action="@{/logout}">
+        <button type="submit">Sign out</button>
+    </form>
+</main>
+</body>
+</html>

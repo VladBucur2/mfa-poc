@@ -1,0 +1,23 @@
+:root { color-scheme: light dark; }
+body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    padding: 3rem 1rem;
+}
+main { width: 100%; max-width: 34rem; }
+h1 { font-size: 1.4rem; }
+label { display: block; margin: 0.75rem 0; }
+input {
+    display: block;
+    width: 100%;
+    padding: 0.5rem;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+.error { color: #b91c1c; font-weight: 600; }
+code, .secret { font-family: ui-monospace, monospace; word-break: break-all; }
+ul.codes { columns: 2; font-family: ui-monospace, monospace; }
+.hint { color: #6b7280; font-size: 0.9rem; }

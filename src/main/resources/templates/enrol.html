@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Set up two-factor authentication</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main>
+    <h1>Set up two-factor authentication</h1>
+    <p class="error" th:if="${error}" th:text="${error}"></p>
+    <p>Scan the code, or add the secret to your generator by hand.</p>
+    <img src="/enrol/qr.png" alt="QR code for the otpauth URI" width="240" height="240">
+    <p>Secret: <span class="secret" th:text="${secret}"></span></p>
+    <p class="hint">URI: <span class="secret" th:text="${uri}"></span></p>
+    <form method="post" th:action="@{/enrol}">
+        <label>Confirm with a current code
+            <input name="code" inputmode="numeric" autocomplete="one-time-code" autofocus required>
+        </label>
+        <button type="submit">Enable</button>
+    </form>
+    <p class="hint">The factor is only switched on once a code you produced has been verified.</p>
+</main>
+</body>
+</html>

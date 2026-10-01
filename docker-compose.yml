@@ -1,0 +1,17 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mfapoc-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpw}
+      MYSQL_DATABASE: mfapoc
+      MYSQL_USER: mfapoc
+      MYSQL_PASSWORD: ${DB_PASSWORD:-mfapoc}
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mfapoc-data:/var/lib/mysql
+
+volumes:
+  mfapoc-data:

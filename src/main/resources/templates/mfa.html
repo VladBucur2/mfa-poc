@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Second factor</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main>
+    <h1>Enter your code</h1>
+    <p class="error" th:if="${error}" th:text="${error}"></p>
+    <form method="post" th:action="@{/mfa}">
+        <label>Six-digit code, or a recovery code
+            <input name="code" inputmode="text" autocomplete="one-time-code" autofocus required>
+        </label>
+        <button type="submit">Verify</button>
+    </form>
+    <p class="hint">Step 2 of 2. Until this succeeds, your session carries no authorities.</p>
+</main>
+</body>
+</html>

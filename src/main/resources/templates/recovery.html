@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Recovery codes</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main>
+    <h1>Your recovery codes</h1>
+    <p>Each code works once. They are shown now and never again, because only their hashes are stored.</p>
+    <ul class="codes">
+        <li th:each="code : ${codes}" th:text="${code}"></li>
+    </ul>
+    <p><a href="/">Continue</a></p>
+</main>
+</body>
+</html>

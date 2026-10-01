@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main>
+    <h1>Sign in</h1>
+    <p class="error" th:if="${error}" th:text="${error}"></p>
+    <p th:if="${param.loggedOut}">You are signed out.</p>
+    <form method="post" th:action="@{/login}">
+        <label>Username
+            <input name="username" autocomplete="username" autofocus required>
+        </label>
+        <label>Password
+            <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">Continue</button>
+    </form>
+    <p class="hint">Step 1 of 2. A correct password alone does not sign you in.</p>
+</main>
+</body>
+</html>
