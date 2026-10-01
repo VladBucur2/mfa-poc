@@ -33,7 +33,7 @@ public class SecurityConfig {
             // No formLogin(): the two-step flow is handled by AuthController, so that a
             // correct password alone never produces an authenticated SecurityContext.
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/login", "/mfa", "/css/**", "/error", "/enrol").permitAll()
+                .requestMatchers("/login", "/mfa", "/css/**", "/error", "/enrol", "/enrol/qr.png").permitAll()
                 .requestMatchers("/admin").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(ex -> ex
